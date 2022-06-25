@@ -7,13 +7,16 @@
  * @author     Muhammet ŞAFAK <info@muhammetsafak.com.tr>
  * @copyright  Copyright © 2022 Muhammet ŞAFAK
  * @license    ./LICENSE  MIT
- * @version    0.1
+ * @version    0.2
  * @link       https://www.muhammetsafak.com.tr
  */
 
 declare(strict_types=1);
 
 namespace MuhammetSafak\SitemapGenerator;
+
+use \SimpleXMLElement;
+use \DOMDocument;
 
 use function ltrim;
 use function rtrim;
@@ -39,6 +42,7 @@ class Generator
 
     protected $version = '1.0';
     protected $encoding = 'UTF-8';
+    protected $formatOutput = false;
 
     /** @var array */
     protected $data = [];
@@ -49,6 +53,9 @@ class Generator
     protected $mainUrl = null;
 
     protected $alternate = [];
+
+    /** @var SimpleXMLElement */
+    protected $xml = null;
 
     public function __construct(int $type = self::STANDARD)
     {
@@ -62,8 +69,8 @@ class Generator
     {
         $this->alternate = [];
         $this->type = self::STANDARD;
-        $this->clear();
         $this->mainUrl = null;
+        $this->clear();
     }
 
     public function __toString()
@@ -71,9 +78,22 @@ class Generator
         return $this->getContent();
     }
 
-    public function clear()
+    public function clear(): self
     {
         $this->data = [];
+        $this->xml = null;
+        $this->formatOutput = false;
+        return $this;
+    }
+
+    /**
+     * @param bool $format
+     * @return $this
+     */
+    public function setFormatOutput(bool $format = true): self
+    {
+        $this->formatOutput = $format;
+        return $this;
     }
 
     /**
@@ -118,17 +138,31 @@ class Generator
 
     public function getContent(): string
     {
-        $content = '<?xml version="' . $this->version . '" encoding="' . $this->encoding . '"?>';
+        $this->xml = new SimpleXMLElement('<urlset/>');
+        $this->xml->addAttribute('xmlns', 'http://www.sitemaps.org/schemas/sitemap/0.9');
         switch ($this->type) {
+            case self::STANDARD :
+                $this->createStandardContent();
+                break;
             case self::IMAGE :
-                return $content . $this->createImageContent();
+                $this->createImageContent();
+                break;
             case self::VIDEO :
-                return $content . $this->createVideoContent();
+                $this->createVideoContent();
+                break;
             case self::NEWS :
-                return $content . $this->createNewsContent();
-            default:
-                return $content . $this->createStandardContent();
+                $this->createNewsContent();
+                break;
         }
+        $dom = new DOMDocument();
+        $dom->loadXML($this->xml->asXML());
+        $dom->preserveWhiteSpace = false;
+        if($this->formatOutput === FALSE){
+            $dom->formatOutput = true;
+        }
+        $dom->xmlVersion = $this->version;
+        $dom->encoding = $this->encoding;
+        return $dom->saveXML();
     }
 
     public function addUrl(string $path, $date, array $extensions = []): self
@@ -160,173 +194,179 @@ class Generator
         return $date;
     }
 
-    private function createStandardContent(): string
+    /**
+     * @param SimpleXMLElement|null $url
+     * @param string $path
+     * @return void
+     */
+    private function appendAlternateUrlAttribute(?SimpleXMLElement &$url, string $path)
     {
-        $content = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+        if ($url === null) {
+            return;
+        }
+        if (empty($this->alternate)) {
+            return;
+        }
+        foreach ($this->alternate as $alternate) {
+            $alternateUrl = $url->addChild('xhtml:link');
+            $alternateUrl->addAttribute('rel', 'alternate');
+            $alternateUrl->addAttribute('hreflang', $alternate['hreflang']);
+            $alternateUrl->addAttribute('href', ($alternate['href'] . $path));
+        }
+    }
+
+    private function createStandardContent(): void
+    {
         foreach ($this->data as $row) {
             $path = '/' . ltrim($row['loc'], "/");
-            $content .= '<url>';
-            $content .= '<loc>' . $this->mainUrl . $path . '</loc>';
-            if(isset($row['lastmod'])){
-                $content .= '<lastmod>' . $this->dateFormat($row['lastmod']) . '</lastmod>';
-            }elseif(isset($row['date'])){
-                $content .= '<lastmod>' . $this->dateFormat($row['date']) . '</lastmod>';
+            $url = $this->xml->addChild('url');
+            $url->addChild('loc', ($this->mainUrl . $path));
+            if(isset($row['lastmod']) || isset($row['date'])){
+                $url->addChild('lastmod', $this->dateFormat(($row['lastmod'] ?? $row['date'])));
             }
             if(isset($row['changefreq'])){
-                $content .= '<changefreq>' . $row['changefreq'] . '</changefreq>';
+                $url->addChild('changefreq', $row['changefreq']);
             }
             if(isset($row['priority'])){
-                $content .= '<priority>' . $row['priority'] . '</priority>';
+                $url->addChild('priority', $row['priority']);
             }
-            if(!empty($this->alternate)){
-                foreach ($this->alternate as $alternate) {
-                    $content .= '<xhtml:link rel="alternate" hreflang="' . $alternate['hreflang'] . '" href="' . ($alternate['href'] . $path) . '"/>';
-                }
-            }
-            $content .= '</url>';
+            $this->appendAlternateUrlAttribute($url, $path);
         }
-        $content .= '</urlset>';
-        return $content;
     }
 
-    private function createVideoContent(): string
+    private function createVideoContent(): void
     {
-        $content = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">';
-        foreach ($this->data as $video) {
-            $content .= '<url>';
-            $content .= '<loc>' . $this->mainUrl . '/' . ltrim($video['loc'], "/") . '</loc>';
-            $content .= '<video:video>';
-            if(isset($video['thumbnail'])){
-                $content .= '<video:thumbnail_loc>' . $video['thumbnail'] . '</video:thumbnail_loc>';
-            }
-            if(isset($video['title'])){
-                $content .= '<video:title>' . $video['thumbnail'] . '</video:title>';
-            }
-            if(isset($video['description'])){
-                $content .= '<video:description>' . $video['description'] . '</video:description>';
-            }
-            if(isset($video['content_loc'])){
-                $content .= '<video:content_loc>' . $video['content_loc'] . '</video:content_loc>';
-            }
-            if(isset($video['player_loc'])){
-                $content .= '<video:player_loc>' . $video['player_loc'] . '</video:player_loc>';
-            }
-            if(isset($video['duration'])){
-                $content .= '<video:duration>' . $video['duration'] . '</video:duration>';
-            }
-            if(isset($video['expiration_date'])){
-                if(($date = $video['expiration_date']) !== FALSE){
-                    $content .= '<video:expiration_date>' . $date . '</video:expiration_date>';
-                }
-            }
-            if(isset($video['rating'])){
-                $content .= '<video:rating>' . $video['rating'] . '</video:rating>';
-            }
-            if(isset($video['view_count'])){
-                $content .= '<video:view_count>' . $video['view_count'] . '</video:view_count>';
-            }
-            if(isset($video['publication_date'])){
-                if(($date = $this->dateFormat($video['publication_date'])) !== FALSE){
-                    $content .= '<video:publication_date>' . $date . '</video:publication_date>';
-                }
-            }
-            if(isset($video['family_friendly'])){
-                $content .= '<video:family_friendly>'
-                        . (($video['family_friendly'] === FALSE || $video['family_friendly'] === 'no') ? 'no' : 'yes')
-                        . '</video:family_friendly>';
-            }
-            if(isset($video['platform'])){
-                $platform = $video['platform'];
-                if(isset($platform['relationship']) && isset($platform['value'])){
-                    $content .= '<video:platform relationship="' . $platform['relationship'] . '">' . $platform['value'] . '</video:platform>';
-                }
-            }
-            if(isset($video['restriction'])){
-                $restriction = $video['restriction'];
-                if(isset($restriction['relationship']) && isset($restriction['value'])){
-                    $content .= '<video:restriction relationship="' . $restriction['relationship'] . '">' . $restriction['value'] . '</video:restriction>';
-                }
-            }
-            if(isset($video['price'])){
-                $price = $video['price'];
-                if(isset($price['currency']) && isset($price['value'])){
-                    $content .= '<video:price currency="' . $price['currency'] . '">' . $price['value'] . '</video:price>';
-                }
-            }
-            if(isset($video['requires_subscription'])){
-                $content .= '<video:requires_subscription>'
-                . (($video['requires_subscription'] === FALSE || $video['requires_subscription'] === 'no') ? 'no' : 'yes')
-                    . '</video:requires_subscription>';
-            }
-            if(isset($video['uploader'])){
-                $uploader = $video['uploader'];
-                if(isset($uploader['info']) && isset($uploader['value'])){
-                    $content .= '<video:uploader info="' . $uploader['info'] . '">' . $uploader['value'] . '</video:uploader>';
-                }
-            }
-            if(isset($video['live'])){
-                $content .= '<video:live>'
-                . (($video['live'] === FALSE || $video['live'] === 'no') ? 'no' : 'yes')
-                    . '</video:live>';
-            }
-            $content .= '</video:video>';
-            $content .= '</url>';
-        }
-        $content .= '</urlset>';
+        $this->xml->addAttribute('xmlns:video', 'http://www.google.com/schemas/sitemap-video/1.1');
+        foreach ($this->data as $row) {
+            $path = '/' . ltrim($row['loc'], "/");
+            $url = $this->xml->addChild('url');
+            $url->addChild('loc', ($this->mainUrl . $path));
+            $video = $url->addChild('video:video');
 
-        return $content;
+            if(isset($row['thumbnail'])){
+                $video->addChild('video:thumbnail_loc', $row['thumbnail']);
+            }
+            if(isset($row['title'])){
+                $video->addChild('video:title', $row['title']);
+            }
+            if(isset($row['description'])){
+                $video->addChild('video:description', $row['description']);
+            }
+            if(isset($row['content_loc'])){
+                $video->addChild('video:content_loc', $row['content_loc']);
+            }
+            if(isset($row['player_loc'])){
+                $video->addChild('video:player_loc', $row['player_loc']);
+            }
+            if(isset($row['duration'])){
+                $video->addChild('video:duration', $row['duration']);
+            }
+            if(isset($row['expiration_date'])){
+                if(($date = $this->dateFormat($row['expiration_date'])) !== FALSE){
+                    $video->addChild('video:expiration_date', $date);
+                }
+            }
+            if(isset($row['rating'])){
+                $video->addChild('video:rating', $row['rating']);
+            }
+            if(isset($row['view_count'])){
+                $video->addChild('video:view_count', $row['view_count']);
+            }
+            if(isset($row['publication_date'])){
+                if(($date = $this->dateFormat($row['publication_date'])) !== FALSE){
+                    $video->addChild('video:publication_date', $date);
+                }
+            }
+            if(isset($row['family_friendly'])){
+                $familyFriendly = (($row['family_friendly'] === FALSE || $row['family_friendly'] === 'no') ? 'no' : 'yes');
+                $video->addChild('video:family_friendly', $familyFriendly);
+            }
+            if(isset($row['platform'])){
+                $pf = $row['platform'];
+                if(isset($pf['relationship'], $pf['value'])){
+                    $platform = $video->addChild('video:platform', $pf['value']);
+                    $platform->addAttribute('relationship', $pf['relationship']);
+                }
+            }
+            if(isset($row['restriction'])){
+                $rest = $row['restriction'];
+                if(isset($rest['relationship'], $rest['value'])){
+                    $restriction = $video->addChild('video:restriction', $rest['value']);
+                    $restriction->addAttribute('relationship', $rest['relationship']);
+                }
+            }
+            if(isset($row['price'])){
+                $pr = $row['price'];
+                if(isset($pr['currency'], $pr['value'])){
+                    $price = $video->addChild('video:price', $pr['value']);
+                    $price->addAttribute('currency', $pr['currency']);
+                }
+            }
+            if(isset($row['requires_subscription'])) {
+                $requires_subscription = ($row['requires_subscription'] === FALSE || $row['requires_subscription'] === 'no') ? 'no' : 'yes';
+                $video->addChild('video:requires_subscription', $requires_subscription);
+            }
+            if(isset($row['uploader'])){
+                $up = $row['uploader'];
+                if(isset($up['info'], $up['value'])){
+                    $uploader = $video->addChild('video:uploader', $up['value']);
+                    $uploader->addAttribute('info', $up['info']);
+                }
+            }
+            if(isset($row['live'])){
+                $video->addChild('video:live', (($row['live'] === FALSE || $row['live'] === 'no') ? 'no' : 'yes'));
+            }
+            $this->appendAlternateUrlAttribute($url, $path);
+        }
     }
 
-    private function createImageContent(): string
+    private function createImageContent(): void
     {
-        $content = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
-        foreach ($this->data as $img) {
-            $content .= '<url>';
-            $content .= '<loc>' . $this->mainUrl . '/' . ltrim($img['loc'], "/") . '</loc>';
-            if(is_array($img['image'])){
-                foreach ($img['image'] as $image) {
-                    $content .= '<image:image><image:loc>' . $image . '</image:loc></image:image>';
+        $this->xml->addAttribute('xmlns:image', 'http://www.google.com/schemas/sitemap-image/1.1');
+
+        foreach ($this->data as $row) {
+            $path = "/" . ltrim($row['loc'], "/");
+            $url = $this->xml->addChild('url');
+            $url->addChild('loc', $this->mainUrl . $path);
+            if(is_array($row['image'])){
+                foreach ($row['image'] as $img) {
+                    $image = $url->addChild('image:image');
+                    $image->addChild('image:loc', (string)$img);
                 }
             }else{
-                $content .= '<image:image><image:loc>' . $img['image'] . '</image:loc></image:image>';
+                $image = $url->addChild('image:image');
+                $image->addChild('image:loc', (string)$row['image']);
             }
-            $content .= '</url>';
+            $this->appendAlternateUrlAttribute($url, $path);
         }
-        $content .= '</urlset>';
-
-        return $content;
     }
 
-    private function createNewsContent(): string
+    private function createNewsContent(): void
     {
-        $content = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">';
-        foreach ($this->data as $new) {
-            $content .= '<url>';
-            $content .= '<loc>' . $this->mainUrl . '/' . ltrim($new['loc'], "/") . '</loc>';
-            $content .= '<news:news>';
-            if(isset($new['publication'])){
-                $publication = $new['publication'];
-                $content .= '<news:publication>';
-                if(isset($publication['name'])){
-                    $content .= '<news:name>' . $publication['name'] . '</news:name>';
+        $this->xml->addAttribute('xmlns:news', 'http://www.google.com/schemas/sitemap-news/0.9');
+        foreach ($this->data as $row) {
+            $path = "/" . ltrim($row['loc'], "/");
+            $url = $this->xml->addChild('url');
+            $url->addChild('loc', $this->mainUrl . $path);
+            $new = $url->addChild('news:news');
+            if(isset($row['publication'])){
+                $pub = $row['publication'];
+                $publication = $new->addChild('news:publication');
+                if(isset($pub['name'])){
+                    $publication->addChild('news:name', $pub['name']);
                 }
-                if(isset($publication['language'])){
-                    $content .= '<news:language>' . $publication['language'] . '</news:language>';
+                if(isset($pub['language'])){
+                    $publication->addChild('news:language', $pub['language']);
                 }
-                $content .= '</news:publication>';
             }
-            if(isset($new['date']) && ($date = $this->dateFormat($new['date'], "Y-m-d") !== FALSE)){
-                $content .= '<news:publication_date>' . $date . '</news:publication_date>';
+            if(isset($row['date']) && ($date = $this->dateFormat($row['date'])) !== FALSE){
+                $new->addChild('news:publication_date', $date);
             }
-            if(isset($new['title'])){
-                $content .= '<news:title>' . $new['title'] . '</news:title>';
+            if(isset($row['title'])){
+                $new->addChild('news:title', $row['title']);
             }
-            $content .= '</news:news>'
-                        .'</url>';
+            $this->appendAlternateUrlAttribute($url, $path);
         }
-        $content .= '</urlset>';
-
-        return $content;
     }
 
 }

@@ -7,6 +7,8 @@ It has been prepared using the document provided by Google to implement current 
 ## Requirements
 
 - PHP 7.2 or higher
+- PHP SimpleXML Extension
+- PHP DOM Extension
 
 ## Installation
 
@@ -17,6 +19,8 @@ composer require muhammetsafak/sitemap-generator
 ## Usage
 
 _**Note :** If you want to get the XML output as a string instead of writing it directly to a file; You can use the `getContent()` method._
+
+_**Note :** If you want the generated XML output to be formatted, you can use the `setFormatOutput()` method._
 
 ### Standard Sitemap Generator
 
